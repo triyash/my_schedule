@@ -4,12 +4,10 @@ import { toDateKey } from './date'
 
 const SETTINGS_TABLE = 'tracker_settings'
 const DAYS_TABLE = 'tracker_days'
-const SINGLETON_ID = 1
 
 function normalizeDayRow(row) {
-  const dateKey = row.day
   return {
-    date: dateKey,
+    date: row.day,
     values: row.task_values || {},
     notes: {
       biggestWin: row.biggest_win || '',
@@ -19,16 +17,16 @@ function normalizeDayRow(row) {
   }
 }
 
-function serializeSettingsRow(state) {
+function serializeSettingsRow(state, userId) {
   return {
-    id: SINGLETON_ID,
+    user_id: userId,
     theme: state.theme || 'dark',
     categories: state.categories || [],
     tasks: state.tasks || [],
   }
 }
 
-function serializeDayRow(dateKey, state) {
+function serializeDayRow(dateKey, state, userId) {
   const day = state.days?.[dateKey] || {
     values: {},
     notes: {
@@ -67,6 +65,7 @@ function serializeDayRow(dateKey, state) {
   }, {})
 
   return {
+    user_id: userId,
     day: dateKey,
     category_completion: categoryCompletion,
     task_values: day.values || {},
@@ -76,19 +75,29 @@ function serializeDayRow(dateKey, state) {
   }
 }
 
-export async function loadState() {
+export async function loadState(userId) {
   if (!isSupabaseConfigured()) {
     return {
       state: makeDefaultState(),
       offline: true,
       error: new Error('Supabase environment variables are missing.'),
+      needsSeed: false,
+    }
+  }
+
+  if (!userId) {
+    return {
+      state: makeDefaultState(),
+      offline: true,
+      error: new Error('Missing authenticated user.'),
+      needsSeed: false,
     }
   }
 
   try {
     const [settingsResponse, daysResponse] = await Promise.all([
-      supabase.from(SETTINGS_TABLE).select('*').eq('id', SINGLETON_ID).maybeSingle(),
-      supabase.from(DAYS_TABLE).select('*').order('day', { ascending: true }),
+      supabase.from(SETTINGS_TABLE).select('*').eq('user_id', userId).maybeSingle(),
+      supabase.from(DAYS_TABLE).select('*').eq('user_id', userId).order('day', { ascending: true }),
     ])
 
     if (settingsResponse.error) {
@@ -121,6 +130,7 @@ export async function loadState() {
       }),
       offline: false,
       error: null,
+      needsSeed: !settings,
     }
   } catch (error) {
     console.error('Failed to load tracker data from Supabase.', error)
@@ -128,6 +138,7 @@ export async function loadState() {
       state: makeDefaultState(),
       offline: true,
       error,
+      needsSeed: false,
     }
   }
 }
@@ -141,6 +152,15 @@ export async function saveState(state, options = {}) {
     }
   }
 
+  const userId = options.userId
+  if (!userId) {
+    return {
+      ok: false,
+      offline: true,
+      error: new Error('Missing authenticated user.'),
+    }
+  }
+
   const mode = options.mode || 'current'
   const targetDayKeys =
     mode === 'all'
@@ -148,8 +168,8 @@ export async function saveState(state, options = {}) {
       : [options.dateKey || toDateKey()]
 
   try {
-    const settingsResponse = await supabase.from(SETTINGS_TABLE).upsert(serializeSettingsRow(state), {
-      onConflict: 'id',
+    const settingsResponse = await supabase.from(SETTINGS_TABLE).upsert(serializeSettingsRow(state, userId), {
+      onConflict: 'user_id',
     })
 
     if (settingsResponse.error) {
@@ -157,9 +177,9 @@ export async function saveState(state, options = {}) {
     }
 
     if (targetDayKeys.length) {
-      const rows = targetDayKeys.map((dateKey) => serializeDayRow(dateKey, state))
+      const rows = targetDayKeys.map((dateKey) => serializeDayRow(dateKey, state, userId))
       const daysResponse = await supabase.from(DAYS_TABLE).upsert(rows, {
-        onConflict: 'day',
+        onConflict: 'user_id,day',
       })
 
       if (daysResponse.error) {
@@ -182,22 +202,22 @@ export async function saveState(state, options = {}) {
   }
 }
 
-export async function saveCurrentDayValue({ state, dateKey, task, category, nextValue }) {
+export async function saveImportedState(state, userId) {
+  return saveState(state, { mode: 'all', userId })
+}
+
+export async function saveCurrentDayValue({ state, dateKey, task, category, nextValue, userId }) {
   const nextState = upsertTaskValue({ state, dateKey, task, category, nextValue })
   return {
     state: nextState,
-    result: await saveState(nextState, { mode: 'current', dateKey }),
+    result: await saveState(nextState, { mode: 'current', dateKey, userId }),
   }
 }
 
-export async function saveCurrentDayNotes(state, dateKey, notesPatch) {
+export async function saveCurrentDayNotes(state, dateKey, notesPatch, userId) {
   const nextState = updateDayNotes(state, dateKey, notesPatch)
   return {
     state: nextState,
-    result: await saveState(nextState, { mode: 'current', dateKey }),
+    result: await saveState(nextState, { mode: 'current', dateKey, userId }),
   }
-}
-
-export async function saveImportedState(state) {
-  return saveState(state, { mode: 'all' })
 }

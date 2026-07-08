@@ -1,81 +1,86 @@
 -- Run this in the Supabase SQL editor.
--- Note: because this app is client-side and uses the public anon key, the policies below allow the app to read/write these tables.
--- For truly private access, you would need auth or a server-side proxy with the service role key.
+-- This script upgrades the tracker tables to authenticated, per-user storage.
+-- If you already have legacy anonymous rows and want to keep them, backfill user_id manually first.
 
-create table if not exists public.tracker_settings (
-  id integer primary key default 1,
-  theme text not null default 'dark',
-  categories jsonb not null default '[]'::jsonb,
-  tasks jsonb not null default '[]'::jsonb,
-  updated_at timestamptz not null default now(),
-  constraint tracker_settings_singleton check (id = 1)
-);
+alter table if exists public.tracker_settings
+  add column if not exists user_id uuid;
 
-create table if not exists public.tracker_days (
-  day date primary key,
-  category_completion jsonb not null default '{}'::jsonb,
-  task_values jsonb not null default '{}'::jsonb,
-  biggest_win text not null default '',
-  learned_today text not null default '',
-  improve_tomorrow text not null default '',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+alter table if exists public.tracker_days
+  add column if not exists user_id uuid;
+
+alter table if exists public.tracker_settings
+  alter column user_id set default auth.uid();
+
+alter table if exists public.tracker_days
+  alter column user_id set default auth.uid();
+
+create unique index if not exists tracker_settings_user_id_key
+  on public.tracker_settings (user_id);
+
+create unique index if not exists tracker_days_user_day_key
+  on public.tracker_days (user_id, day);
 
 alter table public.tracker_settings enable row level security;
 alter table public.tracker_days enable row level security;
 
-grant usage on schema public to anon;
-grant select, insert, update, delete on table public.tracker_settings to anon;
-grant select, insert, update, delete on table public.tracker_days to anon;
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on table public.tracker_settings to authenticated;
+grant select, insert, update, delete on table public.tracker_days to authenticated;
 
-drop policy if exists "Allow anon read settings" on public.tracker_settings;
-create policy "Allow anon read settings"
+drop policy if exists "tracker_settings_select_own" on public.tracker_settings;
+create policy "tracker_settings_select_own"
   on public.tracker_settings
   for select
-  to anon
-  using (true);
+  to authenticated
+  using (auth.uid() = user_id);
 
-drop policy if exists "Allow anon write settings" on public.tracker_settings;
-create policy "Allow anon write settings"
+drop policy if exists "tracker_settings_insert_own" on public.tracker_settings;
+create policy "tracker_settings_insert_own"
   on public.tracker_settings
   for insert
-  to anon
-  with check (true);
+  to authenticated
+  with check (auth.uid() = user_id);
 
-drop policy if exists "Allow anon update settings" on public.tracker_settings;
-create policy "Allow anon update settings"
+drop policy if exists "tracker_settings_update_own" on public.tracker_settings;
+create policy "tracker_settings_update_own"
   on public.tracker_settings
   for update
-  to anon
-  using (true)
-  with check (true);
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
-drop policy if exists "Allow anon read days" on public.tracker_days;
-create policy "Allow anon read days"
+drop policy if exists "tracker_settings_delete_own" on public.tracker_settings;
+create policy "tracker_settings_delete_own"
+  on public.tracker_settings
+  for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "tracker_days_select_own" on public.tracker_days;
+create policy "tracker_days_select_own"
   on public.tracker_days
   for select
-  to anon
-  using (true);
+  to authenticated
+  using (auth.uid() = user_id);
 
-drop policy if exists "Allow anon write days" on public.tracker_days;
-create policy "Allow anon write days"
+drop policy if exists "tracker_days_insert_own" on public.tracker_days;
+create policy "tracker_days_insert_own"
   on public.tracker_days
   for insert
-  to anon
-  with check (true);
+  to authenticated
+  with check (auth.uid() = user_id);
 
-drop policy if exists "Allow anon update days" on public.tracker_days;
-create policy "Allow anon update days"
+drop policy if exists "tracker_days_update_own" on public.tracker_days;
+create policy "tracker_days_update_own"
   on public.tracker_days
   for update
-  to anon
-  using (true)
-  with check (true);
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
-drop policy if exists "Allow anon delete days" on public.tracker_days;
-create policy "Allow anon delete days"
+drop policy if exists "tracker_days_delete_own" on public.tracker_days;
+create policy "tracker_days_delete_own"
   on public.tracker_days
   for delete
-  to anon
-  using (true);
+  to authenticated
+  using (auth.uid() = user_id);

@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import AuthScreen from './components/AuthScreen'
 import ProgressRing from './components/ProgressRing'
 import {
   addCategory,
@@ -25,6 +26,15 @@ import {
   upsertTaskValue,
 } from './lib/tracker'
 import { fromDateKey, humanDate, toDateKey } from './lib/date'
+import {
+  getCurrentSession,
+  sendPasswordResetEmail,
+  signInWithPassword,
+  signOutUser,
+  signUpWithPassword,
+  subscribeToAuthChanges,
+  updatePassword,
+} from './lib/auth'
 import { loadState, saveImportedState, saveState } from './lib/storage'
 
 const BarChart = lazy(() => import('./components/BarChart'))
@@ -91,6 +101,9 @@ function downloadFile(filename, content, mimeType) {
 function App() {
   const importInputRef = useRef(null)
   const saveRunIdRef = useRef(0)
+  const [session, setSession] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [authMode, setAuthMode] = useState('login')
   const todayKey = toDateKey()
   const [state, setState] = useState(() => makeDefaultState())
   const [isHydrated, setIsHydrated] = useState(false)
@@ -104,10 +117,69 @@ function App() {
   const [taskDrafts, setTaskDrafts] = useState({})
 
   useEffect(() => {
+    let isMounted = true
+
+    async function initializeAuth() {
+      const { session: currentSession } = await getCurrentSession()
+      if (!isMounted) {
+        return
+      }
+
+      setSession(currentSession)
+      setAuthReady(true)
+      if (!currentSession) {
+        setAuthMode('login')
+        setIsHydrated(false)
+      }
+    }
+
+    initializeAuth()
+
+    const { data } = subscribeToAuthChanges((event, nextSession) => {
+      if (!isMounted) {
+        return
+      }
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setSession(nextSession)
+        setAuthReady(true)
+        setAuthMode('reset')
+        return
+      }
+
+      if (event === 'SIGNED_OUT') {
+        setSession(null)
+        setState(makeDefaultState())
+        setIsHydrated(false)
+        setSyncStatus('saved')
+        setAuthMode('login')
+        return
+      }
+
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        setSession(nextSession)
+        setAuthReady(true)
+        if (authMode !== 'reset') {
+          setAuthMode('login')
+        }
+      }
+    })
+
+    return () => {
+      isMounted = false
+      data?.subscription?.unsubscribe?.()
+    }
+  }, [authMode])
+
+  useEffect(() => {
     let cancelled = false
 
     async function hydrateState() {
-      const loaded = await loadState()
+      if (!session?.user?.id) {
+        return
+      }
+
+      const loaded = await loadState(session.user.id)
       if (cancelled) {
         return
       }
@@ -122,17 +194,25 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [session?.user?.id])
 
   useEffect(() => {
     if (!isHydrated) {
       return undefined
     }
 
+    if (!session?.user?.id) {
+      return undefined
+    }
+
     const saveRunId = ++saveRunIdRef.current
 
     async function persistState() {
-      const result = await saveState(state, { mode: 'current', dateKey: todayKey })
+      const result = await saveState(state, {
+        mode: 'current',
+        dateKey: todayKey,
+        userId: session.user.id,
+      })
       if (saveRunId !== saveRunIdRef.current) {
         return
       }
@@ -143,7 +223,7 @@ function App() {
     persistState()
 
     return () => {}
-  }, [state, isHydrated, todayKey])
+  }, [state, isHydrated, session?.user?.id, todayKey])
 
   useEffect(() => {
     document.documentElement.dataset.theme = state.theme || 'dark'
@@ -381,7 +461,7 @@ function App() {
 
       setState(nextState)
       setSyncStatus('loading')
-      const result = await saveImportedState(nextState)
+      const result = await saveImportedState(nextState, session.user.id)
       setSyncStatus(result.ok ? 'saved' : 'offline')
     } catch (error) {
       console.error(error)
@@ -424,6 +504,85 @@ function App() {
 
   const orderedTodayCategories = getActiveCategoriesForDate(state, todayKey)
 
+  async function handleLogin(email, password) {
+    const { error } = await signInWithPassword(email, password)
+    if (error) {
+      return { ok: false, message: error.message }
+    }
+    return { ok: true, message: 'Logged in.' }
+  }
+
+  async function handleSignup(email, password) {
+    const { error, data } = await signUpWithPassword(email, password, window.location.origin)
+    if (error) {
+      return { ok: false, message: error.message }
+    }
+    if (data.session) {
+      return { ok: true, message: 'Account created. Loading your workspace.' }
+    }
+    return { ok: true, message: 'Check your email to verify your account.' }
+  }
+
+  async function handleForgotPassword(email) {
+    const { error } = await sendPasswordResetEmail(email, window.location.origin)
+    if (error) {
+      return { ok: false, message: error.message }
+    }
+    return { ok: true, message: 'Password reset email sent.' }
+  }
+
+  async function handleResetPassword(newPassword) {
+    const { error } = await updatePassword(newPassword)
+    if (error) {
+      return { ok: false, message: error.message }
+    }
+    setAuthMode('login')
+    return { ok: true, message: 'Password updated. You can now log in.' }
+  }
+
+  async function handleLogout() {
+    const { error } = await signOutUser()
+    if (error) {
+      window.alert(error.message)
+    }
+  }
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)] px-4 py-10 text-[var(--text)]">
+        <div className="mx-auto max-w-xl rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-sm text-[var(--muted)]">
+          Checking account...
+        </div>
+      </div>
+    )
+  }
+
+  if (!session?.user?.id && authMode !== 'reset') {
+    return (
+      <AuthScreen
+        mode={authMode}
+        onModeChange={setAuthMode}
+        onLogin={handleLogin}
+        onSignup={handleSignup}
+        onForgotPassword={handleForgotPassword}
+        onResetPassword={handleResetPassword}
+      />
+    )
+  }
+
+  if (authMode === 'reset') {
+    return (
+      <AuthScreen
+        mode="reset"
+        onModeChange={setAuthMode}
+        onLogin={handleLogin}
+        onSignup={handleSignup}
+        onForgotPassword={handleForgotPassword}
+        onResetPassword={handleResetPassword}
+      />
+    )
+  }
+
   if (!isHydrated) {
     return (
       <div className="min-h-screen bg-[var(--bg)] px-4 py-10 text-[var(--text)]">
@@ -455,6 +614,13 @@ function App() {
             <span className="rounded-full border border-[var(--line)] px-3 py-2 text-xs text-[var(--muted)]">
               {syncStatus === 'offline' ? 'Offline, changes not saved' : 'Synced'}
             </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm hover:bg-[var(--panel)]"
+            >
+              Log out
+            </button>
             <button
               type="button"
               onClick={() =>
