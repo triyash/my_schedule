@@ -1,0 +1,72 @@
+@import 'tailwindcss';
+
+:root {
+  --bg: #f4f3ef;
+  --panel: #fcfaf5;
+  --text: #1f2b24;
+  --muted: #5f7066;
+  --line: #d7d5cd;
+  --accent: #1f7a50;
+  --chip: #e9e5d8;
+  --ok: #1f7a50;
+  --ok-bg: #d9f0e2;
+  --danger: #ab3d3d;
+  --amber: #bb7b18;
+  --ring-bg: #d6d4cb;
+  --ring-fg: #1f7a50;
+
+  --heat-0: #f4f1e7;
+  --heat-1: #e4f2de;
+  --heat-2: #bee2c5;
+  --heat-3: #86c89f;
+  --heat-4: #4da871;
+  --heat-5: #2f7f53;
+}
+
+:root[data-theme='dark'] {
+  --bg: #121916;
+  --panel: #18221d;
+  --text: #e7f0ea;
+  --muted: #9fb0a6;
+  --line: #2d3a33;
+  --accent: #59be8a;
+  --chip: #233129;
+  --ok: #77d39f;
+  --ok-bg: #20382b;
+  --danger: #ff9b97;
+  --amber: #efc06f;
+  --ring-bg: #24342b;
+  --ring-fg: #59be8a;
+
+  --heat-0: #1a241f;
+  --heat-1: #21372c;
+  --heat-2: #2c5842;
+  --heat-3: #31704f;
+  --heat-4: #3f9868;
+  --heat-5: #55be85;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Avenir Next', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
